@@ -12,71 +12,36 @@ pipeline {
             }
             steps {
                 script {
-                    // Instalar virtualenv (no necesitas instalarlo en el entorno global)
-                    sh 'python -m pip install --user virtualenv'
+                    // Instalar virtualenv localmente en el directorio del proyecto
+                    sh "python -m pip install --target . virtualenv"
 
-                    // Crear un entorno virtual
-                    sh 'python -m virtualenv env'
+                    // Crear un entorno virtual en el directorio del proyecto
+                    sh "python -m virtualenv env"
 
-                    // Editar el archivo env/bin/activate
-                    sh 'echo "export FLASK_APP=entrypoint:app" >> env/bin/activate'
-                    sh 'echo "export FLASK_ENV=development" >> env/bin/activate'
-                    sh 'echo "export APP_SETTINGS_MODULE=config.default" >> env/bin/activate'
-
-                    // Activar el entorno virtual
-                    sh 'source env/bin/activate'
-
-                    // Instalar las dependencias de Python desde un archivo requirements.txt
-                    sh 'pip install -r requirements.txt'
-
-                    // Guardar las dependencias en un archivo requirements.txt
-                    sh 'pip freeze > requirements.txt'
+                    // Activar el entorno virtual y ejecutar comandos
+                    sh "env/bin/python -m pip install --target . -r requirements.txt"
+                    sh "env/bin/python entrypoint.py db init"
+                    sh "env/bin/python entrypoint.py db migrate -m 'Initial_DB'"
+                    sh "env/bin/python entrypoint.py db upgrade"
                 }
             }
         }
-
-        stage('Initialization and Execution') {
-            steps {
-                script {
-                    // Inicializar la base de datos
-                    sh 'flask db init'
-
-                    // Crear una migración inicial
-                    sh 'flask db migrate -m "Initial_DB"'
-
-                    // Aplicar la migración a la base de datos
-                    sh 'flask db upgrade'
-
-                    // No ejecutar 'flask run' aquí, lo haremos en la etapa de implementación
-                }
-            }
-        }
-
         stage('Deployment') {
-            agent any
             steps {
+                // Activar el entorno virtual antes de ejecutar el servidor Flask
+                sh "env/bin/python entrypoint.py run"
                 script {
-                    // Instalar Gunicorn para servir la aplicación Flask (dentro del entorno virtual)
-                    sh 'pip install gunicorn'
-
-                    // Ejecutar la aplicación Flask usando Gunicorn
-                    sh 'gunicorn -b 0.0.0.0:8000 entrypoint:app &' // '&' para ejecutar en segundo plano
+                    retry(20) {
+                        def response = sh(script: "curl -s -o /dev/null -w '%{http_code}' http://localhost:5000", returnStatus: true)
+                        return response == 200
+                    }
                 }
             }
         }
     }
     post {
         always {
-            // Cualquier limpieza que necesites hacer después de la ejecución
-            // Por ejemplo, puedes agregar pasos de limpieza aquí, como detener Gunicorn o eliminar archivos temporales
-            script {
-                try {
-                    // Detener Gunicorn si está en ejecución
-                    sh 'pkill -f gunicorn'
-                } catch (Exception e) {
-                    echo 'Gunicorn no estaba en ejecución.'
-                }
-            }
+            sh "pkill -f 'python entrypoint.py run'"
         }
     }
 }
